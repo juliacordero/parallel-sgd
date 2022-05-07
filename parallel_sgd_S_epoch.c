@@ -6,7 +6,7 @@
 #include <omp.h>
 
 #define num_samples 96453
-#define s 100
+#define s 50
 
 void gradient_descent(double alpha, double* x, double* y, double ep, int max_iter, double* weights, int num_threads)
 {

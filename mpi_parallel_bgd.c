@@ -19,6 +19,7 @@ int main(int argc, char** argv){
     int x_part[num_samples_per_process], y_part[num_samples_per_process];
     // TODO(julia): I don't know if this works
     double prev_MSE[1], gradb[1], gradm[1], curr_MSE[1];
+    bool converged = false;
 
     if (rank == 0) {
     	// read in x and y data
@@ -42,7 +43,6 @@ int main(int argc, char** argv){
 	        y[i] = atof(ystr);
 	    }
 
-
 	    // Set up for gradient descent
 	    double alpha = 0.01;
 	    double ep = 0.01;
@@ -59,7 +59,6 @@ int main(int argc, char** argv){
 	    if( clock_gettime(CLOCK_REALTIME, &total_start) == -1) { perror("clock gettime"); }
 
 	    // ********START EXECUTION OF GRADIENT DESCENT********
-	    bool converged = false;
 	    int iter = 0;
 
 	    // initial weights
@@ -68,7 +67,7 @@ int main(int argc, char** argv){
 
 	    // COMPUTE PREVIOUS MEAN SQUARE ERROR
 	    // Measure start of COMMUNICATION time
-	    if( clock_gettime(CLOCK_REALTIME, &comm_start) == -1) { perror("clock gettime");
+	    if( clock_gettime(CLOCK_REALTIME, &comm_start) == -1) { perror("clock gettime") };
     }
     // TODO(julia): you moved a ton of stuff into process rank == 0, so you'll need to broadcast the necessary vars
     // to all processes
@@ -76,9 +75,13 @@ int main(int argc, char** argv){
     // TODO(julia): Investigate MPI_Scatterv()
     MPI_Scatter(x, num_samples_per_process, MPI_DOUBLE, &x_part, num_samples_per_process, MPI_DOUBLE, 0, MPI_COMM_WORLD);
     MPI_Scatter(y, num_samples_per_process, MPI_DOUBLE, &y_part, num_samples_per_process, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-    // Measure end of COMMUNICATION time
-    if( clock_gettime( CLOCK_REALTIME, &comm_stop) == -1 ) { perror("clock gettime");}		
-    comm_time += (comm_stop.tv_sec - comm_start.tv_sec)+ (double)(comm_stop.tv_nsec - comm_start.tv_nsec)/1e9;
+    
+    if (rank == 0) {
+		// Measure end of COMMUNICATION time
+	    if( clock_gettime( CLOCK_REALTIME, &comm_stop) == -1 ) { perror("clock gettime");}		
+	    comm_time += (comm_stop.tv_sec - comm_start.tv_sec)+ (double)(comm_stop.tv_nsec - comm_start.tv_nsec)/1e9;
+    }
+
     // each process will compute its portion of prev_MSE in parallel
     double partial_prev_MSE[1];
     partial_prev_MSE[0] = 0;
@@ -86,13 +89,20 @@ int main(int argc, char** argv){
     for (i = 0; i < num_samples_per_process; i++) {
         partial_prev_MSE[0] += (m*x_part[i] + b - y_part[i])*(m*x_part[i] + b - y_part[i]);
     }
-    // Measure start of COMMUNICATION time
-    if( clock_gettime(CLOCK_REALTIME, &comm_start) == -1) { perror("clock gettime"); }
+
+    if (rank == 0) {
+    	// Measure start of COMMUNICATION time
+    	if( clock_gettime(CLOCK_REALTIME, &comm_start) == -1) { perror("clock gettime"); }
+    }
+    
     // P0 uses MPI_SUM reduction to sum all partial sums
 	MPI_Reduce(partial_prev_MSE, prev_MSE, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-	// Measure end of COMMUNICATION time
-    if( clock_gettime( CLOCK_REALTIME, &comm_stop) == -1 ) { perror("clock gettime");}		
-    comm_time += (comm_stop.tv_sec - comm_start.tv_sec)+ (double)(comm_stop.tv_nsec - comm_start.tv_nsec)/1e9;
+
+	if (rank == 0) {
+		// Measure end of COMMUNICATION time
+	    if( clock_gettime( CLOCK_REALTIME, &comm_stop) == -1 ) { perror("clock gettime");}		
+	    comm_time += (comm_stop.tv_sec - comm_start.tv_sec)+ (double)(comm_stop.tv_nsec - comm_start.tv_nsec)/1e9;
+	}
     
     while (!converged) {
     	// COMPUTE GRADIENT
@@ -104,45 +114,62 @@ int main(int argc, char** argv){
             partial_gradb[0] += (b + m*x_part[i] - y_part[i]);
             partial_gradm[0] += (b + m*x_part[i] - y_part[i])*x_part[i];
         }
-        // Measure start of COMMUNICATION time
-    	if( clock_gettime(CLOCK_REALTIME, &comm_start) == -1) { perror("clock gettime"); }
+
+        if (rank == 0) {
+	        // Measure start of COMMUNICATION time
+	    	if( clock_gettime(CLOCK_REALTIME, &comm_start) == -1) { perror("clock gettime"); }
+	    }
     	// P0 uses MPI_SUM reduction to sum all partial sums
 		MPI_Reduce(partial_gradb, gradb, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
 		MPI_Reduce(partial_gradm, gradm, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-		// Measure end of COMMUNICATION time
-	    if( clock_gettime( CLOCK_REALTIME, &comm_stop) == -1 ) { perror("clock gettime");}		
-	    comm_time += (comm_stop.tv_sec - comm_start.tv_sec)+ (double)(comm_stop.tv_nsec - comm_start.tv_nsec)/1e9;
-    	
-    	// update weights globally
-    	b = b - alpha*gradb[0];
-        m = m - alpha*gradm[0];
+		
+		if (rank == 0) {
+			// Measure end of COMMUNICATION time
+		    if( clock_gettime( CLOCK_REALTIME, &comm_stop) == -1 ) { perror("clock gettime");}		
+		    comm_time += (comm_stop.tv_sec - comm_start.tv_sec)+ (double)(comm_stop.tv_nsec - comm_start.tv_nsec)/1e9;
+
+		    // update weights globally
+	    	b = b - alpha*gradb[0];
+	        m = m - alpha*gradm[0];
+		}
 
         // COMPUTE CURRENT MEAN SQUARE ERROR
         double partial_curr_MSE[1] = {0};
         for (i = 0; i < num_samples_per_process; i++) {
             partial_curr_MSE[0] += (m*x_part[i] + b - y_part[i])*(m*x_part[i] + b - y_part[i]);
         }
-        // Measure start of COMMUNICATION time
-    	if( clock_gettime(CLOCK_REALTIME, &comm_start) == -1) { perror("clock gettime"); }
+
+        if (rank == 0) {
+	        // Measure start of COMMUNICATION time
+	    	if( clock_gettime(CLOCK_REALTIME, &comm_start) == -1) { perror("clock gettime"); }
+    	}
     	// P0 uses MPI_SUM reduction to sum all partial sums
 		MPI_Reduce(partial_curr_MSE, curr_MSE, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-		// Measure end of COMMUNICATION time
-	    if( clock_gettime( CLOCK_REALTIME, &comm_stop) == -1 ) { perror("clock gettime");}		
-	    comm_time += (comm_stop.tv_sec - comm_start.tv_sec)+ (double)(comm_stop.tv_nsec - comm_start.tv_nsec)/1e9;
+		if (rank == 0) {
+			// Measure end of COMMUNICATION time
+		    if( clock_gettime( CLOCK_REALTIME, &comm_stop) == -1 ) { perror("clock gettime");}		
+		    comm_time += (comm_stop.tv_sec - comm_start.tv_sec)+ (double)(comm_stop.tv_nsec - comm_start.tv_nsec)/1e9;
     	
-    	if (fabs(curr_MSE[0] - prev_MSE[0]) <= ep)
-        {
-            printf("Converged\n");
-            printf("Num iterations: %d\n", iter);
-            converged = true;
-        }
-        prev_MSE[0] = curr_MSE[0];
-        iter++;
+		    // CONVERGENCE CALCULATIONS DONE IN PROCESS 0
+		    if (fabs(curr_MSE[0] - prev_MSE[0]) <= ep) {
+	            printf("Converged\n");
+	            printf("Num iterations: %d\n", iter);
+	            converged = true;
+	        }
+	        prev_MSE[0] = curr_MSE[0];
+	        iter++;
 
-        if (iter == max_iter) {
-            printf("Max iterations exceeded\n");
-            converged = true;
-        }
+	        if (iter == max_iter) {
+	            printf("Max iterations exceeded\n");
+	            converged = true;
+	        }
+
+	        // Let all other processes know what's happening
+	        // Measure start of COMMUNICATION time
+	    	if( clock_gettime(CLOCK_REALTIME, &comm_start) == -1) { perror("clock gettime"); }
+	        MPI_Broadcast(converged, 1, MPI_C_BOOL, 0, MPI_COMM_WORLD);
+	        if( clock_gettime( CLOCK_REALTIME, &comm_stop) == -1 ) { perror("clock gettime");}		
+		    comm_time += (comm_stop.tv_sec - comm_start.tv_sec)+ (double)(comm_stop.tv_nsec - comm_start.tv_nsec)/1e9;
     }
 
     weights[0] = b;
