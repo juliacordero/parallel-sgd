@@ -17,12 +17,8 @@ int main(int argc, char** argv) {
     MPI_Comm_rank(MPI_COMM_WORLD,&rank);
     // Our two data arrays that will get split up amongst the processes using MPI_Scatter
     double x[num_samples], y[num_samples];
-    
-    // Gives us the minimum number of samples that each process will perform computation on.
-    // For example, if there are 4 processes and 7 samples, each process will at minimum
-    // do BGD on 7 / 4 = 1 sample. 
-    int* counts;
-    int* displacements;
+    int counts[MAX_PROCESSES];
+    int displacements[MAX_PROCESSES];
     int max_data_sent_to_process = 0;
 
     double prev_MSE[1], gradb[1], gradm[1], curr_MSE[1];
@@ -64,10 +60,6 @@ int main(int argc, char** argv) {
 	        y[i] = atof(ystr);
 	    }
 
-	    // Allocate memory for counts and displacements
-	    counts = (int*)malloc(size * sizeof(int));
-	    displacements = (int*)malloc(size * sizeof(int));
-
 	    // Fully update counts array, which tells us how to divide the samples up by each process in a more
 	    // load-balanced way.
 	    int k;
@@ -102,10 +94,14 @@ int main(int argc, char** argv) {
     }
 
     // ********START EXECUTION OF GRADIENT DESCENT********
+    printf("hi i'm rank %d about to init and scatterv\n", rank);
     double x_part[max_data_sent_to_process], y_part[max_data_sent_to_process];
+    printf("hi i'm rank %d and i finished the init part\n", rank);
+    // printf all the pointer values to see if anything really isn't working
     MPI_Scatterv(x, counts, displacements, MPI_DOUBLE, &x_part, max_data_sent_to_process, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    printf("hi i'm rank %d and i finished the first scatterv part\n", rank);
     MPI_Scatterv(y, counts, displacements, MPI_DOUBLE, &y_part, max_data_sent_to_process, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-
+    printf("hi i'm done with init and scatterv\n");
     if (rank == 0) {
 		// Measure end of COMMUNICATION time
 	    if( clock_gettime( CLOCK_REALTIME, &comm_stop) == -1 ) { perror("clock gettime");}		
@@ -219,8 +215,6 @@ int main(int argc, char** argv) {
 	    total_time = (total_stop.tv_sec - total_start.tv_sec)+ (double)(total_stop.tv_nsec - total_start.tv_nsec)/1e9;
 
 	    printf("b = %f, m = %f\n Execution time = %f ms\n Communication time = %f ms\n", weights[0], weights[1], total_time*1000, comm_time*1000);
-    	free(counts);
-    	free(displacements);
     }
     
 
