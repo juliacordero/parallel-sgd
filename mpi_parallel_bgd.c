@@ -16,11 +16,14 @@ int main(int argc, char** argv) {
     MPI_Comm_rank(MPI_COMM_WORLD,&rank);
     // Our two data arrays that will get split up amongst the processes using MPI_Scatter
     double x[num_samples], y[num_samples];
-    // TODO(julia): better load balancing that just integer div
-    // TODO(julia): also need to account for remainder in the div
-    int num_samples_per_process = num_samples / size;
-    int x_part[num_samples_per_process], y_part[num_samples_per_process];
-    // TODO(julia): I don't know if this works
+    
+    // Gives us the minimum number of samples that each process will perform computation on.
+    // For example, if there are 4 processes and 7 samples, each process will at minimum
+    // do BGD on 7 / 4 = 1 sample.
+    int counts[size] = {num_samples / size};
+    int displacements[size];
+    int max_data_sent_to_process = 0;
+
     double prev_MSE[1], gradb[1], gradm[1], curr_MSE[1];
     bool converged[1] = {false};
     int iter = 0;
@@ -59,20 +62,40 @@ int main(int argc, char** argv) {
 	        x[i] = atof(xstr);
 	        y[i] = atof(ystr);
 	    }
+	    // Fully update counts array, which tells us how to divide the samples up by each process in a more
+	    // load-balanced way.
+	    int k;
+	    int remainder = num_samples % size;
+	    if (size > 1) {
+	    	for (k = 0; k < remainder; k++) { 
+		    	counts[k]++;
+		    	if (counts[k] > max_data_sent_to_process) { max_data_sent_to_process = counts[k]; }
+		    }
+	    } else {
+	    	max_data_sent_to_process = num_samples;
+	    }
+	    // Fully update the displacements array
+	    displacements[0] = 0;
+	    if (size > 1) {
+	    	for (k = 1; k < size; k++) {
+	    		// The spot where each process starts reading from should be where the previous process 
+	    		// leaves off from. For example, process 0 starts reading at index 0, process 1 stars where
+	    		// process 0 leaves off (at "n/p").
+	    		displacements[k] = counts[k-1];
+	    	}
+	    }
 
 	    // Measure start of TOTAL time
 	    if( clock_gettime(CLOCK_REALTIME, &total_start) == -1) { perror("clock gettime"); }
 	    // Measure start of COMMUNICATION time
 	    if( clock_gettime(CLOCK_REALTIME, &comm_start) == -1) { perror("clock gettime"); }
     }
-    // TODO(julia): you moved a ton of stuff into process rank == 0, so you'll need to broadcast the necessary vars
-    // to all processes
 
     // ********START EXECUTION OF GRADIENT DESCENT********
-    // TODO(julia): Investigate MPI_Scatterv()
-    MPI_Scatter(x, num_samples_per_process, MPI_DOUBLE, &x_part, num_samples_per_process, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-    MPI_Scatter(y, num_samples_per_process, MPI_DOUBLE, &y_part, num_samples_per_process, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-    
+    double x_part[max_data_sent_to_process], y_part[max_data_sent_to_process];
+    MPI_Scatterv(x, counts, displacements, MPI_DOUBLE, &x_part, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Scatterv(y, counts, displacements, MPI_DOUBLE, &y_part, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+
     if (rank == 0) {
 		// Measure end of COMMUNICATION time
 	    if( clock_gettime( CLOCK_REALTIME, &comm_stop) == -1 ) { perror("clock gettime");}		
@@ -83,7 +106,8 @@ int main(int argc, char** argv) {
     // each process will compute its portion of prev_MSE in parallel
     double partial_prev_MSE[1];
     partial_prev_MSE[0] = 0;
-    for (i = 0; i < num_samples_per_process; i++) {
+    // counts[rank] tells us how much data was sent to *this* particular process
+    for (i = 0; i < counts[rank]; i++) {
         partial_prev_MSE[0] += (m[0]*x_part[i] + b[0] - y_part[i])*(m[0]*x_part[i] + b[0] - y_part[i]);
     }
 
@@ -107,7 +131,7 @@ int main(int argc, char** argv) {
     	double partial_gradb[1], partial_gradm[1];
     	partial_gradm[0] = 0;
     	partial_gradb[0] = 0;
-    	for (i = 0; i < num_samples_per_process; i++) {
+    	for (i = 0; i < counts[rank]; i++) {
             partial_gradb[0] += (b[0] + m[0]*x_part[i] - y_part[i]);
             partial_gradm[0] += (b[0] + m[0]*x_part[i] - y_part[i])*x_part[i];
         }
@@ -138,7 +162,7 @@ int main(int argc, char** argv) {
 
         // COMPUTE CURRENT MEAN SQUARE ERROR
         double partial_curr_MSE[1] = {0};
-        for (i = 0; i < num_samples_per_process; i++) {
+        for (i = 0; i < counts[rank]; i++) {
             partial_curr_MSE[0] += (m[0]*x_part[i] + b[0] - y_part[i])*(m[0]*x_part[i] + b[0] - y_part[i]);
         }
 
