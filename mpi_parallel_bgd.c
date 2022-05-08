@@ -6,6 +6,7 @@
 #include <time.h>
 
 #define num_samples 96453
+#define MAX_PROCESSES 16
 
 int main(int argc, char** argv) {
 	printf("hi\n");
@@ -19,9 +20,9 @@ int main(int argc, char** argv) {
     
     // Gives us the minimum number of samples that each process will perform computation on.
     // For example, if there are 4 processes and 7 samples, each process will at minimum
-    // do BGD on 7 / 4 = 1 sample.
-    int counts[size] = {num_samples / size};
-    int displacements[size];
+    // do BGD on 7 / 4 = 1 sample. 
+    int* counts;
+    int* displacements;
     int max_data_sent_to_process = 0;
 
     double prev_MSE[1], gradb[1], gradm[1], curr_MSE[1];
@@ -62,13 +63,23 @@ int main(int argc, char** argv) {
 	        x[i] = atof(xstr);
 	        y[i] = atof(ystr);
 	    }
+
+	    // Allocate memory for counts and displacements
+	    counts = (int*)malloc(size * sizeof(int));
+	    displacements = (int*)malloc(size * sizeof(int));
+	    counts = {};
+
 	    // Fully update counts array, which tells us how to divide the samples up by each process in a more
 	    // load-balanced way.
 	    int k;
 	    int remainder = num_samples % size;
 	    if (size > 1) {
-	    	for (k = 0; k < remainder; k++) { 
-		    	counts[k]++;
+	    	for (k = 0; k < size; k++) { 
+	    		counts[k] = num_samples / size;
+		    	if (remainder > 0) {
+		    		counts[k]++;
+		    		remainder--;
+		    	}
 		    	if (counts[k] > max_data_sent_to_process) { max_data_sent_to_process = counts[k]; }
 		    }
 	    } else {
@@ -93,8 +104,8 @@ int main(int argc, char** argv) {
 
     // ********START EXECUTION OF GRADIENT DESCENT********
     double x_part[max_data_sent_to_process], y_part[max_data_sent_to_process];
-    MPI_Scatterv(x, counts, displacements, MPI_DOUBLE, &x_part, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-    MPI_Scatterv(y, counts, displacements, MPI_DOUBLE, &y_part, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Scatterv(x, counts, displacements, MPI_DOUBLE, &x_part, max_data_sent_to_process, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Scatterv(y, counts, displacements, MPI_DOUBLE, &y_part, max_data_sent_to_process, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
     if (rank == 0) {
 		// Measure end of COMMUNICATION time
@@ -209,6 +220,8 @@ int main(int argc, char** argv) {
 	    total_time = (total_stop.tv_sec - total_start.tv_sec)+ (double)(total_stop.tv_nsec - total_start.tv_nsec)/1e9;
 
 	    printf("b = %f, m = %f\n Execution time = %f ms\n Communication time = %f ms\n", weights[0], weights[1], total_time*1000, comm_time*1000);
+    	free(counts);
+    	free(displacements);
     }
     
 
