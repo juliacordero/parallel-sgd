@@ -67,7 +67,6 @@ int main(int argc, char** argv) {
 	    // Allocate memory for counts and displacements
 	    counts = (int*)malloc(size * sizeof(int));
 	    displacements = (int*)malloc(size * sizeof(int));
-	    counts = {};
 
 	    // Fully update counts array, which tells us how to divide the samples up by each process in a more
 	    // load-balanced way.
